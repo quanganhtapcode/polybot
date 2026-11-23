@@ -21,7 +21,7 @@
     <label>Spread tối đa <span class="field"><input id="max-spread" type="number" min="0" max="100" step=".1" placeholder="Mọi" aria-label="Spread tối đa tính bằng cent"> ¢</span></label>
     <label>Khung thời gian <select id="hours"><option value="1">1 giờ tới</option><option value="6">6 giờ tới</option><option value="12">12 giờ tới</option><option value="24" selected>24 giờ tới</option></select></label>
     <label class="toggle"><input id="hide" type="checkbox" checked> Ẩn Up/Down</label>
-    <label class="sort">Sắp xếp <select id="sort"><option value="time">Mốc gần nhất</option><option value="ask">Best ask thấp</option><option value="size">Nhiều shares nhất</option></select></label>
+    <label class="sort">Sắp xếp <select id="sort"><option value="closest" selected>Midpoint sát ask nhất</option><option value="time">Mốc gần nhất</option><option value="ask">Best ask thấp</option><option value="size">Nhiều shares nhất</option></select></label>
   </section>
   <section id="featured" aria-label="Market nổi bật" hidden></section>
   <section aria-labelledby="results-title">
@@ -31,6 +31,6 @@
   </section>
 </main>
 <footer class="wrap">Mốc theo endDate của Polymarket, giờ Việt Nam. Một số market thể thao dùng giờ bắt đầu trận. Giờ ngừng nhận lệnh và giờ phân xử có thể khác. Midpoint là trung bình của best bid và best ask.</footer>
-<script type="module" src="app.js?v=8"></script>
+<script type="module" src="app.js?v=9"></script>
 </body>
 </html>

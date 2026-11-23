@@ -54,14 +54,19 @@ function media(row, className, lazy) {
 const rowKey = row => JSON.stringify([row.url, row.outcome]);
 const priceText = row => fmt.format(row.ask) + "¢";
 const spreadValue = row => row.bid == null ? null : Math.round((row.ask - row.bid) * 1e6) / 1e6;
+// Ask - midpoint equals half the spread when both book sides exist.
+const askMidGap = row => row.bid == null ? Infinity : Math.abs(spreadValue(row)) / 2;
 const metricText = (value, unit) => value == null ? "—" : fmt.format(value) + unit;
-function quoteDetails(row) {
-  const details = element("div", "quote-details");
-  for (const [name, value] of [
+function quoteMetrics(row) {
+  return [
     ["Bid", metricText(row.bid, "¢")],
     ["Spread", metricText(spreadValue(row), "¢")],
     ["Midpoint", metricText(row.bid == null ? null : (row.bid + row.ask) / 2, "%")],
-  ]) {
+  ];
+}
+function quoteDetails(row) {
+  const details = element("div", "quote-details");
+  for (const [name, value] of quoteMetrics(row)) {
     const metric = element("span", "quote-metric");
     metric.append(element("span", "", name), element("strong", "", value));
     details.append(metric);
@@ -115,8 +120,10 @@ function updateQuote(container, row, suffix = "") {
     price.setAttribute("aria-label", "Best ask " + fmt.format(row.ask) + " cent");
   }
   const details = container.querySelector(".quote-details");
-  const updated = quoteDetails(row);
-  if (details.textContent !== updated.textContent) details.replaceWith(updated);
+  for (const [index, [, value]] of quoteMetrics(row).entries()) {
+    const label = details.children[index].lastElementChild;
+    if (label.textContent !== value) label.textContent = value;
+  }
   const size = sharesText(row) + suffix;
   if (shares.textContent !== size) shares.textContent = size;
 }
@@ -156,7 +163,11 @@ function render(reorder = false) {
   const rank = new Map(rankedKeys.map((key, index) => [key, index]));
   const compare = (a,b) => (order === "ask" ? a.ask-b.ask : order === "size" ? b.size-a.size : a.end-b.end)
     || a.end-b.end || a.ask-b.ask;
-  matches.sort((a,b) => (reorder ? 0 : (rank.get(rowKey(a)) ?? Infinity) - (rank.get(rowKey(b)) ?? Infinity)) || compare(a,b));
+  const relativeRank = (a,b) => (rank.get(rowKey(a)) ?? Infinity) - (rank.get(rowKey(b)) ?? Infinity);
+  matches.sort((a,b) => {
+    if (order === "closest") return askMidGap(a) - askMidGap(b) || relativeRank(a,b) || compare(a,b);
+    return (reorder ? 0 : relativeRank(a,b)) || compare(a,b);
+  });
   rankedKeys = matches.map(rowKey);
   const candidates = !query && category === "Tất cả" ? matches.filter(row => row.image && !row.updown) : [];
   renderFeatured((!reorder && featuredRow ? candidates.find(row => rowKey(row) === rowKey(featuredRow)) : undefined)
@@ -235,7 +246,7 @@ function topOfBook(bids, asks) {
 }
 const stream = (() => {
   const books = new Map();
-  let wanted = new Set(), subscribed = new Set();
+  let wanted = new Map(), subscribed = new Set();
   let socket, heartbeat, retry, paint, lastMessage;
   function stop() {
     clearTimeout(retry);
@@ -247,12 +258,12 @@ const stream = (() => {
     connection?.close();
   }
   function apply(token, book) {
-    const row = rows.find(row => row.token === token);
+    const row = wanted.get(token);
     if (!row || book.timestamp < (row.quoteTime || 0)) return;
     const next = topOfBook(book.bids, book.asks);
     const changed = row.ask !== next.ask || row.bid !== next.bid || row.size !== next.size;
     Object.assign(row, next, {quoteTime:book.timestamp});
-    if (changed && !paint) paint = setTimeout(() => { paint = undefined; render(); }, 1000);
+    if (changed && !paint) paint = requestAnimationFrame(() => { paint = undefined; render(); });
   }
   function connect() {
     if (socket || !wanted.size || document.hidden || typeof WebSocket === "undefined") return;
@@ -260,7 +271,7 @@ const stream = (() => {
     socket = connection;
     connection.onopen = () => {
       if (socket !== connection) return;
-      subscribed = new Set(wanted);
+      subscribed = new Set(wanted.keys());
       connection.send(JSON.stringify({type:"market", assets_ids:[...subscribed]}));
       lastMessage = Date.now();
       heartbeat = setInterval(() => {
@@ -308,16 +319,16 @@ const stream = (() => {
     };
   }
   function watch(watchRows) {
-    wanted = new Set(watchRows.map(row => row.token));
+    wanted = new Map(watchRows.map(row => [row.token, row]));
     if (document.hidden || !wanted.size) { stop(); retry = undefined; return; }
     if (!socket) { if (!retry) connect(); return; }
     if (socket.readyState !== WebSocket.OPEN) return;
-    const added = [...wanted].filter(token => !subscribed.has(token));
+    const added = [...wanted.keys()].filter(token => !subscribed.has(token));
     const removed = [...subscribed].filter(token => !wanted.has(token));
     if (added.length) socket.send(JSON.stringify({operation:"subscribe", assets_ids:added}));
     if (removed.length) socket.send(JSON.stringify({operation:"unsubscribe", assets_ids:removed}));
     for (const token of removed) books.delete(token);
-    subscribed = new Set(wanted);
+    subscribed = new Set(wanted.keys());
   }
   return {watch};
 })();
