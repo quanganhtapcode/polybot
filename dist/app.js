@@ -83,8 +83,10 @@ function quote(row) {
   wrapper.append(box, quoteDetails(row));
   return wrapper;
 }
+const recentGameWindow = 6 * 3600000;
 function endLabel(row) {
-  const prefix = row.endIsGameStart ? "Bắt đầu trận · " : "";
+  const prefix = row.inPlay ? (row.confirmedLive ? "Đang diễn ra · " : "Đã bắt đầu · ")
+    : row.endIsGameStart ? "Bắt đầu trận · " : "";
   const time = element("time", "", prefix + date.format(row.end));
   time.dateTime = new Date(row.end).toISOString();
   return time;
@@ -110,7 +112,7 @@ let featuredRow;
 const cardCache = new Map();
 let rankedKeys = [];
 function structure(row) {
-  return JSON.stringify([row.title, row.category, row.end, row.endIsGameStart ?? false]);
+  return JSON.stringify([row.title, row.category, row.end, row.endIsGameStart ?? false, row.inPlay ?? false, row.confirmedLive ?? false]);
 }
 function updateQuote(container, row, suffix = "") {
   const price = container.querySelector(".ask-value");
@@ -151,14 +153,15 @@ function renderFeatured(row) {
 }
 function render(reorder = false) {
   const query = norm($("query").value.trim());
+  const terms = query.split(/[^\p{L}\p{N}]+/u).filter(term => term && term !== "vs");
   const now = Date.now();
   const horizon = now + Number($("hours").value) * 3600000;
   const min = $("ask").valueAsNumber || 0;
   const maxSpread = $("max-spread").valueAsNumber;
   const matches = rows.filter(row => row.ask != null && row.ask >= min
-    && (!Number.isFinite(maxSpread) || (row.bid != null && spreadValue(row) <= maxSpread)) && row.end > now && row.end <= horizon
+    && (!Number.isFinite(maxSpread) || (row.bid != null && spreadValue(row) <= maxSpread)) && (row.inPlay ? row.end > now - recentGameWindow : row.end > now && row.end <= horizon)
     && (!$("hide").checked || !row.updown) && (category === "Tất cả" || category === row.category)
-    && norm(row.title + " " + row.outcome).includes(query));
+    && terms.every(term => norm(row.title + " " + row.outcome + " " + (row.eventTitle || "")).includes(term)));
   const order = $("sort").value;
   const rank = new Map(rankedKeys.map((key, index) => [key, index]));
   const compare = (a,b) => (order === "ask" ? a.ask-b.ask : order === "size" ? b.size-a.size : a.end-b.end)
@@ -392,31 +395,67 @@ async function refresh(manual = false) {
       await Promise.all(Array.from({length:Math.ceil(group.length / 100)}, (_, i) => quote(group.slice(i * 100, (i + 1) * 100))));
     }
   }
+  function addMarket(m, event, inPlay = false) {
+    const end = Date.parse(m.endDate);
+    if (!m.active || m.closed || !m.acceptingOrders || !Number.isFinite(end)) return;
+    const gameTime = m.gameStartTime?.replace(" ", "T").replace(/([+-]\d{2})$/, "$1:00") || event?.startTime;
+    const endIsGameStart = Boolean(gameTime && Date.parse(gameTime) === end);
+    if (inPlay ? !(endIsGameStart && end <= started && end > started - recentGameWindow) :
+      !(end > started && end <= horizon)) return;
+    const eventSlug = event?.slug || m.slug;
+    if (!m.slug || !eventSlug) return;
+    const slug = encodeURIComponent(eventSlug) + (eventSlug === m.slug ? "" : "/" + encodeURIComponent(m.slug));
+    const title = m.question || m.slug;
+    const isUpDown = updown(title + " " + m.slug);
+    if (hideUpDown && isUpDown) return;
+    const tags = (m.tags || []).map(t => t.label || t.slug || "").join(" ");
+    const base = {title,end,url:"https://polymarket.com/event/"+slug,
+      category:inPlay || m.sportsMarketType ? "Thể thao" : categories(tags,title+" "+m.slug),
+      eventTitle:event?.title,updown:isUpDown,endIsGameStart,inPlay,confirmedLive:inPlay && event.live === true,
+      image:m.image || event?.image};
+    const outcomes = unpack(m.outcomes);
+    unpack(m.clobTokenIds).forEach((asset,i) => {
+      const token = String(asset);
+      if (!asset || !outcomes[i] || seen.has(token)) return;
+      seen.add(token);
+      pending.set(token, {...base,token,outcome:outcomes[i]});
+    });
+  }
+  async function recentSports() {
+    const query = new URLSearchParams({closed:"false", tag_id:"1", limit:"30",
+      end_date_min:new Date(started - recentGameWindow).toISOString(),
+      end_date_max:new Date(started).toISOString()});
+    const events = [];
+    const cursors = new Set();
+    while (true) {
+      const page = await get("https://gamma-api.polymarket.com/events/keyset?" + query, {signal});
+      for (const event of page.events) {
+        if (event.live !== false && event.ended !== true) events.push(event);
+      }
+      if (!page.next_cursor) return events;
+      if (cursors.has(page.next_cursor)) throw Error("Cursor thể thao lặp lại");
+      cursors.add(page.next_cursor);
+      query.set("after_cursor", page.next_cursor);
+    }
+  }
   try {
+    const sports = recentSports().then(events => ({events}), error => ({error}));
     let cursor;
     do {
       const page = await get("https://gamma-api.polymarket.com/markets/keyset?" + params, {signal});
-      for (const m of page.markets) {
-        const end = Date.parse(m.endDate);
-        if (!m.active || !m.acceptingOrders || !(end > started && end <= horizon)) continue;
-        const event = m.events?.[0]?.slug || m.slug;
-        if (!m.slug || !event) continue;
-        const slug = encodeURIComponent(event) + (event === m.slug ? "" : "/" + encodeURIComponent(m.slug));
-        const title = m.question || m.slug;
-        const isUpDown = updown(title + " " + m.slug);
-        if (hideUpDown && isUpDown) continue;
-        const tags = (m.tags || []).map(t => t.label || t.slug || "").join(" ");
-        const gameStart = m.gameStartTime?.replace(" ", "T").replace(/([+-]\d{2})$/, "$1:00");
-        const endIsGameStart = Boolean(gameStart && Date.parse(gameStart) === end);
-        const base = {title,end,url:"https://polymarket.com/event/"+slug,category:categories(tags,title+" "+m.slug),
-          updown:isUpDown,endIsGameStart,image:m.image || m.events?.[0]?.image};
-        const outcomes = unpack(m.outcomes);
-        unpack(m.clobTokenIds).forEach((asset,i) => {
-          if (!asset || !outcomes[i] || seen.has(asset)) return;
-          seen.add(asset);
-          const token = String(asset);
-          pending.set(token, {...base,token,outcome:outcomes[i]});
-        });
+      for (const m of page.markets) addMarket(m, m.events?.[0]);
+      if (!pages) {
+        const {events, error} = await sports;
+        if (signal.aborted) return;
+        if (error) console.warn("Chưa tải được danh sách thể thao đã bắt đầu", error);
+        for (const event of events || []) {
+          for (const m of event.markets || []) addMarket(m, event, true);
+        }
+        if (error) {
+          for (const row of rows) {
+            if (row.inPlay && row.end > started - recentGameWindow) fresh.push(row);
+          }
+        }
       }
       pages++;
       if (manual) $("status").textContent = "Đang quét sổ lệnh · " + pages + " trang";
