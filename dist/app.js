@@ -53,13 +53,30 @@ function media(row, className, lazy) {
 }
 const rowKey = row => JSON.stringify([row.url, row.outcome]);
 const priceText = row => fmt.format(row.ask) + "¢";
+const spreadValue = row => row.bid == null ? null : Math.round((row.ask - row.bid) * 1e6) / 1e6;
+const metricText = (value, unit) => value == null ? "—" : fmt.format(value) + unit;
+function quoteDetails(row) {
+  const details = element("div", "quote-details");
+  for (const [name, value] of [
+    ["Bid", metricText(row.bid, "¢")],
+    ["Spread", metricText(spreadValue(row), "¢")],
+    ["Midpoint", metricText(row.bid == null ? null : (row.bid + row.ask) / 2, "%")],
+  ]) {
+    const metric = element("span", "quote-metric");
+    metric.append(element("span", "", name), element("strong", "", value));
+    details.append(metric);
+  }
+  return details;
+}
 const sharesText = row => fmt.format(row.size) + " shares";
 function quote(row) {
   const box = element("div", "quote");
   const price = element("strong", "ask-value", priceText(row));
   price.setAttribute("aria-label", "Best ask " + fmt.format(row.ask) + " cent");
   box.append(element("span", "", row.outcome), price);
-  return box;
+  const wrapper = element("div", "quote-block");
+  wrapper.append(box, quoteDetails(row));
+  return wrapper;
 }
 function endLabel(row) {
   const prefix = row.endIsGameStart ? "Bắt đầu trận · " : "";
@@ -97,6 +114,9 @@ function updateQuote(container, row, suffix = "") {
     price.textContent = priceText(row);
     price.setAttribute("aria-label", "Best ask " + fmt.format(row.ask) + " cent");
   }
+  const details = container.querySelector(".quote-details");
+  const updated = quoteDetails(row);
+  if (details.textContent !== updated.textContent) details.replaceWith(updated);
   const size = sharesText(row) + suffix;
   if (shares.textContent !== size) shares.textContent = size;
 }
@@ -127,7 +147,9 @@ function render(reorder = false) {
   const now = Date.now();
   const horizon = now + Number($("hours").value) * 3600000;
   const min = $("ask").valueAsNumber || 0;
-  const matches = rows.filter(row => row.ask >= min && row.end > now && row.end <= horizon
+  const maxSpread = $("max-spread").valueAsNumber;
+  const matches = rows.filter(row => row.ask >= min
+    && (!Number.isFinite(maxSpread) || (row.bid != null && spreadValue(row) <= maxSpread)) && row.end > now && row.end <= horizon
     && (!$("hide").checked || !row.updown) && (category === "Tất cả" || category === row.category)
     && norm(row.title + " " + row.outcome).includes(query));
   const order = $("sort").value;
@@ -167,7 +189,10 @@ function render(reorder = false) {
   }
   const empty = grid.querySelector(".empty");
   if (!matches.length) {
-    const message = loading ? "Đang tìm market phù hợp…" : "Không có kết quả cho bộ lọc này.";
+    const message = loading ? "Đang tìm market phù hợp…" :
+      Number.isFinite(maxSpread) && !rows.some(row => row.bid != null)
+        ? "Cần dữ liệu sổ lệnh mới để lọc spread."
+        : "Không có kết quả cho bộ lọc này.";
     if (empty) empty.textContent = message;
     else grid.append(element("p", "empty", message));
   } else {
@@ -176,7 +201,7 @@ function render(reorder = false) {
   $("more").hidden = visible >= matches.length;
 }
 function reset() { visible = 36; render(true); }
-for (const id of ["query","ask","hours","hide","sort"]) $(id).addEventListener("input", reset);
+for (const id of ["query","ask","max-spread","hours","hide","sort"]) $(id).addEventListener("input", reset);
 $("more").addEventListener("click", () => { visible += 36; render(); });
 function unpack(value) { return typeof value === "string" ? JSON.parse(value) : value || []; }
 async function get(url, options) {
@@ -222,7 +247,13 @@ async function refresh(manual = false) {
         if (price < ask) {ask = price; size = amount;}
         else if (price === ask) size += amount;
       }
-      if (Number.isFinite(ask)) fresh.push({...row,ask,size});
+      if (!Number.isFinite(ask)) continue;
+      let bid = null;
+      for (const level of book.bids || []) {
+        const price = Number(level.price) * 100;
+        if (Number(level.size) > 0 && Number.isFinite(price) && (bid === null || price > bid)) bid = price;
+      }
+      fresh.push({...row,ask,bid,size});
     }
   }
   async function quotes(tokens) {

@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="description" content="Lọc market Polymarket sắp kết thúc theo best ask và thể loại.">
-<title>Poly Scanner</title><link rel="stylesheet" href="style.css?v=4">
+<title>Poly Scanner</title><link rel="stylesheet" href="style.css?v=5">
 </head>
 <body>
 <header class="site-header">
@@ -18,6 +18,7 @@
   <div class="page-head"><h1>Market sắp tới mốc</h1><p id="status" role="status"></p></div>
   <section class="filters" aria-label="Bộ lọc">
     <label>Best ask tối thiểu <span class="field"><input id="ask" type="number" min="1" max="100" value="95" step=".1" aria-label="Best ask tối thiểu tính bằng cent"> ¢</span></label>
+    <label>Spread tối đa <span class="field"><input id="max-spread" type="number" min="0" max="100" step=".1" placeholder="Mọi" aria-label="Spread tối đa tính bằng cent"> ¢</span></label>
     <label>Khung thời gian <select id="hours"><option value="1">1 giờ tới</option><option value="6">6 giờ tới</option><option value="12">12 giờ tới</option><option value="24" selected>24 giờ tới</option></select></label>
     <label class="toggle"><input id="hide" type="checkbox" checked> Ẩn Up/Down</label>
     <label class="sort">Sắp xếp <select id="sort"><option value="time">Mốc gần nhất</option><option value="ask">Best ask thấp</option><option value="size">Nhiều shares nhất</option></select></label>
@@ -29,7 +30,7 @@
     <div class="pagination"><button id="more" hidden>Xem thêm</button></div>
   </section>
 </main>
-<footer class="wrap">Mốc theo endDate của Polymarket, giờ Việt Nam. Một số market thể thao dùng giờ bắt đầu trận. Giờ ngừng nhận lệnh và giờ phân xử có thể khác.</footer>
-<script type="module" src="app.js?v=6"></script>
+<footer class="wrap">Mốc theo endDate của Polymarket, giờ Việt Nam. Một số market thể thao dùng giờ bắt đầu trận. Giờ ngừng nhận lệnh và giờ phân xử có thể khác. Midpoint là trung bình của best bid và best ask.</footer>
+<script type="module" src="app.js?v=7"></script>
 </body>
 </html>
