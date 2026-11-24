@@ -3,22 +3,28 @@
 <head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="description" content="Lọc market Polymarket sắp kết thúc theo best ask và thể loại.">
-<title>Poly Scanner</title><link rel="stylesheet" href="style.css?v=6">
+<title>Poly Scanner</title><link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Manrope:wght@400..800&amp;display=swap"><link rel="stylesheet" href="style.css?v=7">
 </head>
 <body>
 <header class="site-header">
   <div class="head wrap">
     <a class="brand" href="./"><span class="brand-mark" aria-hidden="true">◈</span> Poly<span>Scanner</span></a>
     <label class="search"><span class="lens" aria-hidden="true"></span><input id="query" type="search" placeholder="Tìm tên market hoặc outcome…" aria-label="Tìm tên market hoặc outcome"></label>
-    <button id="refresh"><span aria-hidden="true">↻</span> Làm mới</button>
+    <div class="refresh-controls"><span id="connection" class="connection">Chờ theo dõi</span><button id="refresh"><span aria-hidden="true">↻</span> Làm mới</button></div>
   </div>
   <nav id="categories" class="wrap" aria-label="Thể loại"></nav>
 </header>
 <main class="wrap">
   <div class="page-head"><h1>Market đang mở</h1><p id="status" role="status"></p></div>
+  <div id="market-views" class="market-views" role="group" aria-label="Trạng thái market">
+    <button type="button" data-view="upcoming" aria-pressed="true">Sắp tới</button>
+    <button type="button" data-view="live" aria-pressed="false">Đang diễn ra</button>
+  </div>
   <section class="filters" aria-label="Bộ lọc">
     <label>Best ask tối thiểu <span class="field"><input id="ask" type="number" min="1" max="100" value="95" step=".1" aria-label="Best ask tối thiểu tính bằng cent"> ¢</span></label>
     <label>Spread tối đa <span class="field"><input id="max-spread" type="number" min="0" max="100" step=".1" placeholder="Mọi" aria-label="Spread tối đa tính bằng cent"> ¢</span></label>
+    <label>Shares tối thiểu <span class="field"><input id="min-shares" type="number" min="0" step="any" placeholder="Mọi" aria-label="Shares tối thiểu tại best ask"></span></label>
+    <label>Ước tính mua <span class="field"><input id="quote-quantity" type="number" min="0.01" step="any" placeholder="Shares" aria-label="Số shares để ước tính giá mua"></span></label>
     <label>Khung thời gian <select id="hours"><option value="1">1 giờ tới</option><option value="6">6 giờ tới</option><option value="12">12 giờ tới</option><option value="24" selected>24 giờ tới</option></select></label>
     <label class="toggle"><input id="hide" type="checkbox" checked> Ẩn Up/Down</label>
     <label class="sort">Sắp xếp <select id="sort"><option value="closest" selected>Midpoint sát ask nhất</option><option value="time">Mốc gần nhất</option><option value="ask">Best ask thấp</option><option value="size">Nhiều shares nhất</option></select></label>
@@ -30,6 +36,6 @@
   </section>
 </main>
 <footer class="wrap">Thời gian theo giờ Việt Nam. Các trận đã bắt đầu chỉ xuất hiện khi Polymarket xác nhận đang diễn ra.</footer>
-<script type="module" src="app.js?v=11"></script>
+<script type="module" src="app.js?v=12"></script>
 </body>
 </html>

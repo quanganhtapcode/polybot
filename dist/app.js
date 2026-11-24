@@ -73,6 +73,22 @@ function quoteDetails(row) {
   }
   return details;
 }
+function updateEstimate(label, row) {
+  const quantity = $("quote-quantity").valueAsNumber;
+  label.hidden = !(quantity > 0);
+  if (label.hidden) return;
+  const average = quantity <= row.size ? row.ask : stream.estimate(row, quantity);
+  const text = average === undefined ? "Đang chờ độ sâu sổ lệnh" :
+    average === null ? "Không đủ shares trong sổ lệnh" : "Giá mua TB ước tính " + fmt.format(average) + "¢";
+  if (label.textContent !== text) label.textContent = text;
+}
+function updateAge(badge, row, now) {
+  const seconds = row.quoteTime ? Math.max(0, Math.floor((now - row.quoteTime) / 1000)) : Infinity;
+  const text = seconds === Infinity ? "Chưa có giờ giá" : seconds < 5 ? "Vừa cập nhật" :
+    seconds < 60 ? seconds + " giây trước" : Math.floor(seconds / 60) + " phút trước";
+  if (badge.textContent !== text) badge.textContent = text;
+  badge.classList.toggle("stale", seconds >= 60);
+}
 const sharesText = row => fmt.format(row.size) + " shares";
 function quote(row) {
   const box = element("div", "quote");
@@ -88,7 +104,7 @@ const liveStatusLifetime = 5 * 60000;
 const resolvedTokens = new Set();
 function endLabel(row) {
   const prefix = row.inPlay ? "Đang diễn ra · "
-    : row.endIsGameStart ? "Bắt đầu trận · " : "";
+    : row.endIsGameStart ? (row.clearBookOnStart ? "Dọn sổ lệnh · " : "Bắt đầu trận · ") : "";
   const time = element("time", "", prefix + date.format(row.end));
   time.dateTime = new Date(row.end).toISOString();
   return time;
@@ -101,21 +117,29 @@ function card(row) {
   const heading = element("h3");
   heading.append(marketLink(row, row.title));
   const foot = element("div", "card-foot");
-  foot.append(element("span", "share-value", sharesText(row)), marketLink(row, "Mở market"));
+  const age = element("span", "quote-age");
+  updateAge(age, row, Date.now());
+  foot.append(element("span", "share-value", sharesText(row)), age, marketLink(row, "Mở market"));
   const title = element("div", "card-title");
   const image = media(row, "card-media", true);
   if (image) title.append(image);
   title.append(heading);
-  body.append(meta, title, quote(row), foot);
+  const prices = quote(row);
+  const estimate = element("p", "quote-estimate");
+  updateEstimate(estimate, row);
+  prices.append(estimate);
+  body.append(meta, title, prices, foot);
   item.append(body);
   return item;
 }
 const cardCache = new Map();
 let rankedKeys = [];
+let marketView = "upcoming";
+const grid = $("grid");
 function structure(row) {
-  return JSON.stringify([row.title, row.category, row.end, row.endIsGameStart ?? false, row.inPlay ?? false, row.confirmedLive ?? false]);
+  return JSON.stringify([row.title, row.category, row.end, row.endIsGameStart ?? false, row.inPlay ?? false, row.clearBookOnStart ?? false]);
 }
-function updateQuote(container, row, suffix = "") {
+function updateQuote(container, row, now) {
   const price = container.querySelector(".ask-value");
   const shares = container.querySelector(".share-value");
   if (price.textContent !== priceText(row)) {
@@ -127,7 +151,9 @@ function updateQuote(container, row, suffix = "") {
     const label = details.children[index].lastElementChild;
     if (label.textContent !== value) label.textContent = value;
   }
-  const size = sharesText(row) + suffix;
+  const size = sharesText(row);
+  updateAge(container.querySelector(".quote-age"), row, now);
+  updateEstimate(container.querySelector(".quote-estimate"), row);
   if (shares.textContent !== size) shares.textContent = size;
 }
 function render(reorder = false) {
@@ -137,7 +163,8 @@ function render(reorder = false) {
   const horizon = now + Number($("hours").value) * 3600000;
   const min = $("ask").valueAsNumber || 0;
   const maxSpread = $("max-spread").valueAsNumber;
-  const matches = rows.filter(row => !resolvedTokens.has(row.token) && row.ask != null && row.ask >= min
+  const minShares = $("min-shares").valueAsNumber || 0;
+  const matches = rows.filter(row => !resolvedTokens.has(row.token) && row.ask != null && row.ask >= min && row.size >= minShares && Boolean(row.inPlay) === (marketView === "live")
     && (!Number.isFinite(maxSpread) || (row.bid != null && spreadValue(row) <= maxSpread)) && (row.inPlay ? row.liveCheckedAt > now - liveStatusLifetime && row.end > now - recentGameWindow : row.end > now && row.end <= horizon)
     && (!$("hide").checked || !row.updown) && (category === "Tất cả" || category === row.category)
     && terms.every(term => norm(row.title + " " + row.outcome + " " + (row.eventTitle || "")).includes(term)));
@@ -146,14 +173,15 @@ function render(reorder = false) {
   const compare = (a,b) => (order === "ask" ? a.ask-b.ask : order === "size" ? b.size-a.size : a.end-b.end)
     || a.end-b.end || a.ask-b.ask;
   const relativeRank = (a,b) => (rank.get(rowKey(a)) ?? Infinity) - (rank.get(rowKey(b)) ?? Infinity);
+  const holdRank = !reorder && (window.scrollY > 150 || grid.contains(document.activeElement));
   matches.sort((a,b) => {
+    if (holdRank) return relativeRank(a,b) || compare(a,b);
     if (order === "closest") return askMidGap(a) - askMidGap(b) || relativeRank(a,b) || compare(a,b);
     return (reorder ? 0 : relativeRank(a,b)) || compare(a,b);
   });
   rankedKeys = matches.map(rowKey);
   $("count").textContent = fmt.format(matches.length);
   for (const button of $("categories").children) button.setAttribute("aria-pressed", button.textContent === category);
-  const grid = $("grid");
   const nextCards = new Set();
   for (const [index, row] of matches.slice(0, visible).entries()) {
     const key = rowKey(row);
@@ -166,7 +194,7 @@ function render(reorder = false) {
       entry = {node, shape};
       cardCache.set(key, entry);
     } else {
-      updateQuote(entry.node, row);
+      updateQuote(entry.node, row, now);
     }
     if (grid.children[index] !== entry.node) grid.insertBefore(entry.node, grid.children[index] || null);
   }
@@ -191,7 +219,21 @@ function render(reorder = false) {
   stream.watch(matches.slice(0, Math.min(visible, 72)));
 }
 function reset() { visible = 36; render(true); }
-for (const id of ["query","ask","max-spread","sort"]) $(id).addEventListener("input", reset);
+$("quote-quantity").addEventListener("input", () => render());
+for (const id of ["query","ask","max-spread","min-shares","sort"]) $(id).addEventListener("input", reset);
+for (const button of $("market-views").children) {
+  button.addEventListener("click", () => {
+    marketView = button.dataset.view;
+    for (const tab of $("market-views").children) tab.setAttribute("aria-pressed", tab === button);
+    reset();
+  });
+}
+let wasScrolled = false;
+window.addEventListener("scroll", () => {
+  const scrolled = window.scrollY > 150;
+  if (wasScrolled && !scrolled) render();
+  wasScrolled = scrolled;
+}, {passive:true});
 for (const id of ["hours","hide"]) $(id).addEventListener("input", () => {
   reset();
   if (loading) scanController.abort();
@@ -232,7 +274,8 @@ const stream = (() => {
   const books = new Map();
   let wanted = new Map(), subscribed = new Set();
   let socket, heartbeat, retry, paint, lastMessage;
-  function stop() {
+  function stop(label = "Chờ theo dõi") {
+    $("connection").textContent = label;
     clearTimeout(retry);
     clearInterval(heartbeat);
     const connection = socket;
@@ -247,10 +290,11 @@ const stream = (() => {
     const next = topOfBook(book.bids, book.asks);
     const changed = row.ask !== next.ask || row.bid !== next.bid || row.size !== next.size;
     Object.assign(row, next, {quoteTime:book.timestamp});
-    if (changed && !paint) paint = requestAnimationFrame(() => { paint = undefined; render(); });
+    if ((changed || $("quote-quantity").valueAsNumber > 0) && !paint) paint = requestAnimationFrame(() => { paint = undefined; render(); });
   }
   function connect() {
     if (socket || !wanted.size || document.hidden || typeof WebSocket === "undefined") return;
+    $("connection").textContent = "Đang kết nối";
     const connection = new WebSocket("wss://ws-subscriptions-clob.polymarket.com/ws/market");
     socket = connection;
     connection.onopen = () => {
@@ -258,6 +302,7 @@ const stream = (() => {
       subscribed = new Set(wanted.keys());
       connection.send(JSON.stringify({type:"market", assets_ids:[...subscribed], custom_feature_enabled:true}));
       lastMessage = Date.now();
+      $("connection").textContent = "WebSocket đang kết nối";
       heartbeat = setInterval(() => {
         if (Date.now() - lastMessage > 30000) connection.close();
         else if (connection.readyState === WebSocket.OPEN) connection.send("PING");
@@ -269,6 +314,7 @@ const stream = (() => {
       if (data === "PONG") return;
       let payload;
       try { payload = JSON.parse(data); } catch { return; }
+      $("connection").textContent = "Đang nhận giá live";
       for (const message of Array.isArray(payload) ? payload : [payload]) {
         const timestamp = Number(message.timestamp) || Date.now();
         if (message.event_type === "market_resolved") {
@@ -301,13 +347,13 @@ const stream = (() => {
     connection.onerror = () => connection.close();
     connection.onclose = () => {
       if (socket !== connection) return;
-      stop();
+      stop("Đang kết nối lại");
       retry = setTimeout(() => { retry = undefined; connect(); }, 5000);
     };
   }
   function watch(watchRows) {
     wanted = new Map(watchRows.map(row => [row.token, row]));
-    if (document.hidden || !wanted.size) { stop(); retry = undefined; return; }
+    if (document.hidden || !wanted.size) { stop(document.hidden ? "Tạm dừng" : "Chờ theo dõi"); retry = undefined; return; }
     if (!socket) { if (!retry) connect(); return; }
     if (socket.readyState !== WebSocket.OPEN) return;
     const added = [...wanted.keys()].filter(token => !subscribed.has(token));
@@ -317,7 +363,19 @@ const stream = (() => {
     for (const token of removed) books.delete(token);
     subscribed = new Set(wanted.keys());
   }
-  return {watch};
+  function estimate(row, quantity) {
+    const book = books.get(row.token);
+    if (!book || book.timestamp < row.quoteTime) return undefined;
+    let remaining = quantity, cost = 0;
+    for (const [price, size] of [...book.asks].sort(([a], [b]) => a - b)) {
+      const fill = Math.min(size, remaining);
+      remaining -= fill;
+      cost += price * fill;
+      if (remaining <= 1e-8) return cost / quantity;
+    }
+    return null;
+  }
+  return {watch, estimate};
 })();
 const refreshDelay = 180000;
 let refreshTimer, scanController, manualQueued = false;
@@ -411,7 +469,7 @@ async function refresh(manual = false) {
     const tags = (m.tags || []).map(t => t.label || t.slug || "").join(" ");
     const base = {title,end,url:"https://polymarket.com/event/"+slug,
       category:inPlay || m.sportsMarketType ? "Thể thao" : categories(tags,title+" "+m.slug),
-      eventTitle:event?.title,updown:isUpDown,endIsGameStart,inPlay,liveCheckedAt:inPlay ? Date.now() : undefined,
+      eventTitle:event?.title,updown:isUpDown,endIsGameStart,clearBookOnStart:m.clearBookOnStart === true,inPlay,liveCheckedAt:inPlay ? Date.now() : undefined,
       image:m.image || event?.image};
     const outcomes = unpack(m.outcomes);
     unpack(m.clobTokenIds).forEach((asset,i) => {
