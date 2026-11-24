@@ -84,8 +84,10 @@ function quote(row) {
   return wrapper;
 }
 const recentGameWindow = 6 * 3600000;
+const liveStatusLifetime = 5 * 60000;
+const resolvedTokens = new Set();
 function endLabel(row) {
-  const prefix = row.inPlay ? (row.confirmedLive ? "Đang diễn ra · " : "Đã bắt đầu · ")
+  const prefix = row.inPlay ? "Đang diễn ra · "
     : row.endIsGameStart ? "Bắt đầu trận · " : "";
   const time = element("time", "", prefix + date.format(row.end));
   time.dateTime = new Date(row.end).toISOString();
@@ -108,7 +110,6 @@ function card(row) {
   item.append(body);
   return item;
 }
-let featuredRow;
 const cardCache = new Map();
 let rankedKeys = [];
 function structure(row) {
@@ -129,28 +130,6 @@ function updateQuote(container, row, suffix = "") {
   const size = sharesText(row) + suffix;
   if (shares.textContent !== size) shares.textContent = size;
 }
-function renderFeatured(row) {
-  if (!row && !featuredRow) return;
-  if (row && featuredRow && rowKey(row) === rowKey(featuredRow) && structure(row) === structure(featuredRow)) {
-    updateQuote($("featured"), row, " tại best ask");
-    featuredRow = row;
-    return;
-  }
-  featuredRow = row;
-  const section = $("featured");
-  section.hidden = !row;
-  section.replaceChildren();
-  if (!row) return;
-  const panel = element("article", "feature-panel");
-  const body = element("div", "feature-body");
-  const title = element("h2");
-  title.append(marketLink(row, row.title));
-  const foot = element("div", "card-foot");
-  foot.append(element("span", "share-value", sharesText(row) + " tại best ask"), endLabel(row), marketLink(row, "Mở market"));
-  body.append(element("div", "feature-label", "Nổi bật · " + row.category), title, quote(row), foot);
-  panel.append(body, media(row, "feature-media", false));
-  section.append(panel);
-}
 function render(reorder = false) {
   const query = norm($("query").value.trim());
   const terms = query.split(/[^\p{L}\p{N}]+/u).filter(term => term && term !== "vs");
@@ -158,8 +137,8 @@ function render(reorder = false) {
   const horizon = now + Number($("hours").value) * 3600000;
   const min = $("ask").valueAsNumber || 0;
   const maxSpread = $("max-spread").valueAsNumber;
-  const matches = rows.filter(row => row.ask != null && row.ask >= min
-    && (!Number.isFinite(maxSpread) || (row.bid != null && spreadValue(row) <= maxSpread)) && (row.inPlay ? row.end > now - recentGameWindow : row.end > now && row.end <= horizon)
+  const matches = rows.filter(row => !resolvedTokens.has(row.token) && row.ask != null && row.ask >= min
+    && (!Number.isFinite(maxSpread) || (row.bid != null && spreadValue(row) <= maxSpread)) && (row.inPlay ? row.liveCheckedAt > now - liveStatusLifetime && row.end > now - recentGameWindow : row.end > now && row.end <= horizon)
     && (!$("hide").checked || !row.updown) && (category === "Tất cả" || category === row.category)
     && terms.every(term => norm(row.title + " " + row.outcome + " " + (row.eventTitle || "")).includes(term)));
   const order = $("sort").value;
@@ -172,10 +151,6 @@ function render(reorder = false) {
     return (reorder ? 0 : relativeRank(a,b)) || compare(a,b);
   });
   rankedKeys = matches.map(rowKey);
-  const candidates = !query && category === "Tất cả" ? matches.filter(row => row.image && !row.updown) : [];
-  renderFeatured((!reorder && featuredRow ? candidates.find(row => rowKey(row) === rowKey(featuredRow)) : undefined)
-    || candidates.find(row => row.category !== "Thể thao" && row.category !== "Khác" && row.size >= 25)
-    || candidates[0]);
   $("count").textContent = fmt.format(matches.length);
   for (const button of $("categories").children) button.setAttribute("aria-pressed", button.textContent === category);
   const grid = $("grid");
@@ -203,7 +178,7 @@ function render(reorder = false) {
   }
   const empty = grid.querySelector(".empty");
   if (!matches.length) {
-    const message = loading ? "Đang tìm market phù hợp…" :
+    const message = loading || !loaded ? "Đang tìm market phù hợp…" :
       Number.isFinite(maxSpread) && !rows.some(row => row.bid != null)
         ? "Cần dữ liệu sổ lệnh mới để lọc spread."
         : "Không có kết quả cho bộ lọc này.";
@@ -213,23 +188,29 @@ function render(reorder = false) {
     empty?.remove();
   }
   $("more").hidden = visible >= matches.length;
-  stream.watch([featuredRow, ...matches.slice(0, Math.min(visible, 72))].filter(row => row?.token));
+  stream.watch(matches.slice(0, Math.min(visible, 72)));
 }
 function reset() { visible = 36; render(true); }
 for (const id of ["query","ask","max-spread","sort"]) $(id).addEventListener("input", reset);
 for (const id of ["hours","hide"]) $(id).addEventListener("input", () => {
   reset();
-  scanController?.abort();
-  scheduleRefresh(200);
+  if (loading) scanController.abort();
+  else scheduleRefresh(200);
 });
 $("more").addEventListener("click", () => { visible += 36; render(); });
 function unpack(value) { return typeof value === "string" ? JSON.parse(value) : value || []; }
-async function get(url, options) {
-  for (let attempt=0; attempt<3; attempt++) {
-    const res = await fetch(url, {...options, signal:options?.signal ? AbortSignal.any([options.signal, AbortSignal.timeout(25000)]) : AbortSignal.timeout(25000)});
-    if (res.ok) return res.json();
-    if (attempt === 2 || (res.status !== 429 && res.status < 500)) throw Error("HTTP " + res.status);
-    await new Promise(resolve => setTimeout(resolve, 700 * (attempt + 1)));
+async function get(url, {signal, ...options} = {}) {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const timeout = AbortSignal.timeout(12000);
+    try {
+      const response = await fetch(url, {...options, signal:signal ? AbortSignal.any([signal, timeout]) : timeout});
+      if (response.ok) return await response.json();
+      if (response.status !== 429 && response.status < 500) throw Object.assign(Error("HTTP " + response.status), {permanent:true});
+      throw Error("HTTP " + response.status);
+    } catch (error) {
+      if (signal?.aborted || error.permanent || attempt === 1) throw error;
+      await new Promise(resolve => setTimeout(resolve, 800));
+    }
   }
 }
 function levels(entries = []) {
@@ -275,7 +256,7 @@ const stream = (() => {
     connection.onopen = () => {
       if (socket !== connection) return;
       subscribed = new Set(wanted.keys());
-      connection.send(JSON.stringify({type:"market", assets_ids:[...subscribed]}));
+      connection.send(JSON.stringify({type:"market", assets_ids:[...subscribed], custom_feature_enabled:true}));
       lastMessage = Date.now();
       heartbeat = setInterval(() => {
         if (Date.now() - lastMessage > 30000) connection.close();
@@ -290,7 +271,10 @@ const stream = (() => {
       try { payload = JSON.parse(data); } catch { return; }
       for (const message of Array.isArray(payload) ? payload : [payload]) {
         const timestamp = Number(message.timestamp) || Date.now();
-        if (message.event_type === "book" && wanted.has(message.asset_id)) {
+        if (message.event_type === "market_resolved") {
+          for (const token of message.assets_ids || []) resolvedTokens.add(String(token));
+          if (!paint) paint = requestAnimationFrame(() => { paint = undefined; render(); });
+        } else if (message.event_type === "book" && wanted.has(message.asset_id)) {
           const token = message.asset_id;
           if (timestamp < (books.get(token)?.timestamp || 0)) continue;
           const book = {bids:levels(message.bids), asks:levels(message.asks), timestamp};
@@ -336,7 +320,8 @@ const stream = (() => {
   return {watch};
 })();
 const refreshDelay = 180000;
-let refreshTimer, scanController;
+let refreshTimer, scanController, manualQueued = false;
+const statusTime = new Intl.DateTimeFormat("vi-VN", {timeZone:"Asia/Ho_Chi_Minh",hour:"2-digit",minute:"2-digit",second:"2-digit"});
 function scheduleRefresh(delay = refreshDelay) {
   clearTimeout(refreshTimer);
   refreshTimer = setTimeout(() => {
@@ -345,13 +330,20 @@ function scheduleRefresh(delay = refreshDelay) {
   }, delay);
 }
 async function refresh(manual = false) {
-  if (loading) return;
+  if (loading) {
+    if (manual) {
+      manualQueued = true;
+      $("status").textContent = "Đang khởi động lại…";
+      scanController.abort();
+    }
+    return;
+  }
   loading = true;
   clearTimeout(refreshTimer);
   const controller = new AbortController();
   scanController = controller;
   const {signal} = controller;
-  if (manual) $("status").textContent = "Đang làm mới…";
+  $("status").textContent = "Đang làm mới…";
   $("refresh").setAttribute("aria-busy", "true");
   const started = Date.now();
   const horizon = started + Number($("hours").value) * 3600000;
@@ -361,7 +353,8 @@ async function refresh(manual = false) {
   const fresh = [];
   const pending = new Map();
   const seen = new Set();
-  let pages = 0;
+  const failed = new Set();
+  let pages = 0, sportsUnavailable = false;
   async function quote(entries) {
     const tokens = new Map(entries);
     const books = await get("https://clob.polymarket.com/books", {method:"POST", signal,
@@ -383,7 +376,7 @@ async function refresh(manual = false) {
         ? {...row,ask:previous.ask,bid:previous.bid,size:previous.size,quoteTime:previous.quoteTime}
         : row;
     });
-    rows = partial ? [...merged, ...current.values()] : merged;
+    rows = [...merged, ...[...current.values()].filter(row => partial || failed.has(row.token))];
     loaded = true;
     if (partial) render();
   }
@@ -392,7 +385,14 @@ async function refresh(manual = false) {
     pending.clear();
     for (let start = 0; start < entries.length; start += 600) {
       const group = entries.slice(start, start + 600);
-      await Promise.all(Array.from({length:Math.ceil(group.length / 100)}, (_, i) => quote(group.slice(i * 100, (i + 1) * 100))));
+      const batches = Array.from({length:Math.ceil(group.length / 100)}, (_, i) => group.slice(i * 100, (i + 1) * 100));
+      const results = await Promise.allSettled(batches.map(quote));
+      signal.throwIfAborted();
+      for (const [index, result] of results.entries()) {
+        if (result.status === "rejected") {
+          for (const [token] of batches[index]) failed.add(token);
+        }
+      }
     }
   }
   function addMarket(m, event, inPlay = false) {
@@ -411,7 +411,7 @@ async function refresh(manual = false) {
     const tags = (m.tags || []).map(t => t.label || t.slug || "").join(" ");
     const base = {title,end,url:"https://polymarket.com/event/"+slug,
       category:inPlay || m.sportsMarketType ? "Thể thao" : categories(tags,title+" "+m.slug),
-      eventTitle:event?.title,updown:isUpDown,endIsGameStart,inPlay,confirmedLive:inPlay && event.live === true,
+      eventTitle:event?.title,updown:isUpDown,endIsGameStart,inPlay,liveCheckedAt:inPlay ? Date.now() : undefined,
       image:m.image || event?.image};
     const outcomes = unpack(m.outcomes);
     unpack(m.clobTokenIds).forEach((asset,i) => {
@@ -422,15 +422,16 @@ async function refresh(manual = false) {
     });
   }
   async function recentSports() {
-    const query = new URLSearchParams({closed:"false", tag_id:"1", limit:"30",
+    const query = new URLSearchParams({closed:"false", live:"true", tag_id:"1", limit:"30",
       end_date_min:new Date(started - recentGameWindow).toISOString(),
       end_date_max:new Date(started).toISOString()});
     const events = [];
+    const sportsSignal = AbortSignal.any([signal, AbortSignal.timeout(10000)]);
     const cursors = new Set();
     while (true) {
-      const page = await get("https://gamma-api.polymarket.com/events/keyset?" + query, {signal});
+      const page = await get("https://gamma-api.polymarket.com/events/keyset?" + query, {signal:sportsSignal});
       for (const event of page.events) {
-        if (event.live !== false && event.ended !== true) events.push(event);
+        if (event.live === true && event.ended !== true) events.push(event);
       }
       if (!page.next_cursor) return events;
       if (cursors.has(page.next_cursor)) throw Error("Cursor thể thao lặp lại");
@@ -441,40 +442,41 @@ async function refresh(manual = false) {
   try {
     const sports = recentSports().then(events => ({events}), error => ({error}));
     let cursor;
+    const cursors = new Set();
     do {
       const page = await get("https://gamma-api.polymarket.com/markets/keyset?" + params, {signal});
       for (const m of page.markets) addMarket(m, m.events?.[0]);
       if (!pages) {
         const {events, error} = await sports;
         if (signal.aborted) return;
+        sportsUnavailable = Boolean(error);
         if (error) console.warn("Chưa tải được danh sách thể thao đã bắt đầu", error);
         for (const event of events || []) {
           for (const m of event.markets || []) addMarket(m, event, true);
         }
-        if (error) {
-          for (const row of rows) {
-            if (row.inPlay && row.end > started - recentGameWindow) fresh.push(row);
-          }
-        }
+
       }
       pages++;
       if (manual) $("status").textContent = "Đang quét sổ lệnh · " + pages + " trang";
       if (pending.size >= 600 || (pending.size && !fresh.length)) {
         await flush();
-        if (fresh.length && !rows.some(row => row.token) && !signal.aborted) publish(true);
+        if (fresh.length && !signal.aborted) publish(true);
       }
-      if (page.next_cursor && page.next_cursor === cursor) throw Error("Cursor lặp lại");
       cursor = page.next_cursor;
-      if (cursor) params.set("after_cursor",cursor);
+      if (cursor) {
+        if (cursors.has(cursor)) throw Error("Cursor lặp lại");
+        cursors.add(cursor);
+        params.set("after_cursor", cursor);
+      }
     } while(cursor);
     await flush();
     if (!signal.aborted) {
       publish(false);
-      $("status").textContent = "";
+      $("status").textContent = failed.size || sportsUnavailable ? "Cập nhật một phần · sẽ thử lại" : "Cập nhật " + statusTime.format(Date.now());
     }
   } catch (error) {
     if (!signal.aborted) {
-      if (manual || !loaded) $("status").textContent = "Chưa làm mới được. Trang sẽ thử lại.";
+      $("status").textContent = "Chưa tải đủ dữ liệu · đang giữ kết quả đã nhận";
       console.error(error);
     }
   } finally {
@@ -482,20 +484,19 @@ async function refresh(manual = false) {
     scanController = undefined;
     $("refresh").removeAttribute("aria-busy");
     render();
-    scheduleRefresh(signal.aborted ? 200 : refreshDelay);
+    if (manualQueued) {
+      manualQueued = false;
+      void refresh(true);
+    } else {
+      scheduleRefresh(signal.aborted ? 200 : failed.size || sportsUnavailable || $("status").textContent.startsWith("Chưa") ? 15000 : refreshDelay);
+    }
   }
 }
 $("refresh").addEventListener("click", () => refresh(true));
-try {
-  const data = await get(new URL("snapshot.json", import.meta.url));
-  rows = data.map(([title,outcome,ask,size,end,url,scan,image]) => ({title,outcome,ask,size,end,url,scan,image,
-    category:categories("",title+" "+url),updown:updown(title+" "+url)}));
-  loaded = true;
-} catch {}
 render();
 
 // Keep the time window current while the dashboard stays open.
-setInterval(render, 30000);
+setInterval(render, 5000);
 scheduleRefresh(0);
 document.addEventListener("visibilitychange", () => {
   render();

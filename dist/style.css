@@ -8,3 +8,25 @@
 .meta{flex-wrap:wrap}.meta time{font-variant-numeric:tabular-nums}
 
 .quote-block{margin-top:auto}.quote-details{display:flex;flex-wrap:wrap;gap:4px 12px;margin-top:7px;color:var(--muted);font-size:13px}.quote-metric{display:inline-flex;gap:4px;align-items:baseline}.quote-metric strong{color:var(--ink);font-variant-numeric:tabular-nums}
+
+/* Quote list */
+body{background:#f7f9fd}.site-header{background:white}.page-head{margin:30px 0 18px;align-items:center}
+.page-head h1{font-size:clamp(27px,4vw,36px);letter-spacing:-.045em}
+#status{display:inline-flex;min-height:32px;align-items:center;border:1px solid #dae3f2;background:white;border-radius:8px;padding:5px 10px;font-variant-numeric:tabular-nums}
+#status:empty{visibility:hidden}
+.filters{background:white;gap:12px 18px}
+.result-head{margin:22px 0 10px}.result-head h2{font-size:15px;font-weight:650;color:var(--muted);letter-spacing:0}
+.result-head strong{color:var(--ink)}
+.grid{display:grid;grid-template-columns:minmax(0,1fr);gap:8px}
+.card{border-radius:10px;box-shadow:none}.card-body{padding:12px 15px;gap:8px 16px}
+.card-title{min-height:0;align-items:center}.card-media{height:32px;width:32px;flex-basis:32px}
+.card h3{font-size:15px}.meta{justify-content:flex-start}.meta time{font-size:13px}
+.quote-block{margin:0}.quote{margin:0;padding:5px 8px}.quote strong{font-size:17px}.quote-details{margin-top:4px}
+.card-foot a{font-size:13px}.share-value{white-space:nowrap;font-variant-numeric:tabular-nums}
+@media(min-width:900px){
+.card-body{display:grid;grid-template-columns:minmax(0,1fr) minmax(260px,.75fr) 132px;align-items:center}
+.meta{grid-column:1;grid-row:1}.card-title{grid-column:1;grid-row:2}
+.quote-block{grid-column:2;grid-row:1/span 2}.card-foot{grid-column:3;grid-row:1/span 2;display:grid;justify-items:end;justify-content:end;gap:5px}
+}
+@media(max-width:899px){.card-body{display:grid;grid-template-columns:minmax(0,1fr) minmax(165px,.7fr)}.card-title{grid-row:2;grid-column:1}.quote-block{grid-column:2;grid-row:1/span 2;align-self:center}.card-foot{grid-column:1/-1;border-top:1px solid var(--line);padding-top:6px}}
+@media(max-width:540px){.card-body{grid-template-columns:minmax(0,1fr)}.card-title,.quote-block,.card-foot{grid-row:auto;grid-column:1}.page-head{margin:20px 0 12px}.filters{gap:8px 12px}}
